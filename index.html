@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AR Mission Hub</title>
+    
+    <!-- 1. Include A-Frame and MindAR -->
+    <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.2/dist/mindar-image-aframe.prod.js"></script>
+
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        
+        /* A-Frame Scene element (The camera view) */
+        #ar-scene {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+        }
+
+        /* UI Layer for Scan Mode */
+        #scan-ui {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none;
+            z-index: 11;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+            align-items: center;
+            padding-bottom: 50px;
+        }
+
+        .instruction-box {
+            background: rgba(0, 0, 0, 0.6);
+            color: white;
+            padding: 15px 25px;
+            border-radius: 30px;
+            font-size: 16px;
+            text-align: center;
+            backdrop-filter: blur(5px);
+            border: 1px solid rgba(255,255,255,0.2);
+            transition: opacity 0.3s;
+        }
+
+        /* Unity Game Container (The Overlay) */
+        /* This is confirmed to be full-screen based on your code's definition */
+        #game-container {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 999; 
+            background: transparent; 
+            display: none; 
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* The iframe holding the Unity build */
+        #unity-iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+
+        /* MOCK GAME UI (For demonstration purposes only) */
+        #mock-game-ui {
+            color: white;
+            text-align: center;
+            padding: 20px;
+            max-width: 300px;
+        }
+        .mission-btn {
+            background: #ff4757;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 18px;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-top: 20px;
+            box-shadow: 0 4px 15px rgba(255, 71, 87, 0.4);
+        }
+        .mission-btn:active { transform: scale(0.95); }
+        
+        /* Scanning reticle effect */
+        .reticle {
+            width: 200px;
+            height: 200px;
+            border: 2px solid rgba(255, 255, 255, 0.5);
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            border-radius: 20px;
+        }
+        .reticle::before, .reticle::after {
+            content: ''; position: absolute; width: 20px; height: 20px;
+            border-color: #00e676; border-style: solid;
+            transition: all 0.3s;
+        }
+        .reticle::before { top: -2px; left: -2px; border-width: 4px 0 0 4px; }
+        .reticle::after { bottom: -2px; right: -2px; border-width: 0 4px 4px 0; }
+        
+        .scanning .reticle::before, .scanning .reticle::after {
+            animation: pulse-corners 2s infinite;
+        }
+
+        @keyframes pulse-corners {
+            0% { opacity: 0.5; }
+            50% { opacity: 1; border-color: #fff; }
+            100% { opacity: 0.5; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- AR SCENE -->
+    <a-scene 
+        mindar-image="imageTargetSrc: https://cdn.jsdelivr.net/gh/hiukim/mind-ar-js@1.2.0/examples/image-tracking/assets/card-example/card.mind; filterMinCF:0.0001; filterBeta: 0.001;" 
+        color-space="sRGB" 
+        renderer="colorManagement: true, physicallyCorrectLights" 
+        vr-mode-ui="enabled: false" 
+        device-orientation-permission-ui="enabled: false"
+        id="ar-scene">
+
+        <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+
+        <!-- Target 0: The Example Card -->
+        <a-entity id="target-1" mindar-image-target="targetIndex: 0">
+            <a-plane color="blue" opacity="0.5" position="0 0 0" height="0.552" width="1" rotation="0 0 0"></a-plane>
+        </a-entity>
+
+    </a-scene>
+
+    <!-- UI Overlay for AR Mode -->
+    <div id="scan-ui" class="scanning">
+        <div class="reticle"></div>
+        <div class="instruction-box" id="status-text">
+            Scan the target object...
+        </div>
+    </div>
+
+    <!-- Game Container (Overlays everything when active) -->
+    <div id="game-container">
+        
+        <iframe 
+            id="unity-iframe" 
+            src="unity_build/index.html"
+            style="width: 100%; height: 100%; border: none;">
+        </iframe>
+
+    </div>
+
+    <script>
+        // --- CONFIGURATION ---
+        const AR_SCENE = document.querySelector('a-scene');
+        const GAME_CONTAINER = document.getElementById('game-container');
+        const STATUS_TEXT = document.getElementById('status-text');
+        
+        const UNITY_IFRAME = document.getElementById('unity-iframe');
+        let unityGameInstance = null; 
+
+        // --- EVENT LISTENERS ---
+        AR_SCENE.addEventListener('loaded', () => {
+            console.log("AR Scene Loaded");
+            
+            const target1 = document.getElementById('target-1');
+            
+            target1.addEventListener('targetFound', () => {
+                console.log("Target Found!");
+                triggerGameMode(1); // Start Mission 1
+            });
+        });
+
+        // --- CORE LOGIC ---
+
+        function triggerGameMode(missionId) {
+            // 1. Update UI
+            STATUS_TEXT.innerText = "Target Found! Loading Mission...";
+            
+            // 2. Pause AR System 
+            const arSystem = AR_SCENE.systems['mindar-image-system'];
+            if (arSystem) {
+                arSystem.pause(); 
+            }
+
+            // *** CRITICAL FIX 1: HIDE AR SCENE ELEMENT ***
+            AR_SCENE.style.display = 'none';
+
+            // *** CRITICAL FIX 2: FIND AND HIDE THE VIDEO ELEMENT EXPLICITLY ***
+            // This is the underlying cause of the frozen screen.
+            const videoElement = document.querySelector('video');
+            if (videoElement) {
+                videoElement.style.display = 'none';
+            }
+
+            // 3. Show Game Container (Now nothing should be behind it)
+            GAME_CONTAINER.style.display = 'flex';
+            
+            console.log(`Mission ${missionId} Started`);
+        }
+
+        function finishMission() {
+            console.log("Mission Complete. Returning to AR.");
+
+            // 1. Hide Game
+            GAME_CONTAINER.style.display = 'none';
+
+            // 2. Resume AR
+            // *** CRITICAL FIX 1: SHOW AR SCENE ELEMENT ***
+            AR_SCENE.style.display = 'block';
+
+            // *** CRITICAL FIX 2: SHOW THE VIDEO ELEMENT EXPLICITLY ***
+            const videoElement = document.querySelector('video');
+            if (videoElement) {
+                videoElement.style.display = 'block';
+            }
+
+            const arSystem = AR_SCENE.systems['mindar-image-system'];
+            if (arSystem) {
+                arSystem.unpause(); // Resume camera processing
+            }
+
+            // 3. Update Status
+            STATUS_TEXT.innerText = "Mission Complete! Find next target.";
+            
+        }
+
+        // --- BRIDGE FOR UNITY TO CALL JAVASCRIPT ---
+        window.receiveMessageFromUnity = function(message) {
+            if (message === "MissionComplete") {
+                finishMission();
+            }
+        };
+
+    </script>
+</body>
+</html>
