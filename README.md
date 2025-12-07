@@ -1,2 +1,0 @@
-# ARGame
-Test

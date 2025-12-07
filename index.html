@@ -46,13 +46,12 @@
         }
 
         /* Unity Game Container (The Overlay) */
-        /* This is confirmed to be full-screen based on your code's definition */
         #game-container {
             position: absolute;
             top: 0; left: 0; width: 100%; height: 100%;
-            z-index: 999; 
+            z-index: 999; /* Highest priority */
             background: transparent; 
-            display: none; 
+            display: none; /* Hidden by default */
             flex-direction: column;
             justify-content: center;
             align-items: center;
@@ -65,26 +64,6 @@
             border: none;
         }
 
-        /* MOCK GAME UI (For demonstration purposes only) */
-        #mock-game-ui {
-            color: white;
-            text-align: center;
-            padding: 20px;
-            max-width: 300px;
-        }
-        .mission-btn {
-            background: #ff4757;
-            color: white;
-            border: none;
-            padding: 15px 30px;
-            font-size: 18px;
-            border-radius: 8px;
-            cursor: pointer;
-            margin-top: 20px;
-            box-shadow: 0 4px 15px rgba(255, 71, 87, 0.4);
-        }
-        .mission-btn:active { transform: scale(0.95); }
-        
         /* Scanning reticle effect */
         .reticle {
             width: 200px;
@@ -117,8 +96,9 @@
 <body>
 
     <!-- AR SCENE -->
+    <!-- Pointing to ./targets.mind (your multi-target file) -->
     <a-scene 
-        mindar-image="imageTargetSrc: https://cdn.jsdelivr.net/gh/hiukim/mind-ar-js@1.2.0/examples/image-tracking/assets/card-example/card.mind; filterMinCF:0.0001; filterBeta: 0.001;" 
+        mindar-image="imageTargetSrc: ./targets.mind;">
         color-space="sRGB" 
         renderer="colorManagement: true, physicallyCorrectLights" 
         vr-mode-ui="enabled: false" 
@@ -127,9 +107,14 @@
 
         <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
 
-        <!-- Target 0: The Example Card -->
-        <a-entity id="target-1" mindar-image-target="targetIndex: 0">
-            <a-plane color="blue" opacity="0.5" position="0 0 0" height="0.552" width="1" rotation="0 0 0"></a-plane>
+        <!-- TARGET 0: (e.g., The Baker) -->
+        <a-entity id="target-0" mindar-image-target="targetIndex: 0">
+            <a-plane color="blue" opacity="0" position="0 0 0" height="0.552" width="1"></a-plane>
+        </a-entity>
+
+        <!-- TARGET 1: (e.g., The Soldier) -->
+        <a-entity id="target-1" mindar-image-target="targetIndex: 1">
+            <a-plane color="red" opacity="0" position="0 0 0" height="0.552" width="1"></a-plane>
         </a-entity>
 
     </a-scene>
@@ -138,19 +123,17 @@
     <div id="scan-ui" class="scanning">
         <div class="reticle"></div>
         <div class="instruction-box" id="status-text">
-            Scan the target object...
+            Scan a Mission Card...
         </div>
     </div>
 
-    <!-- Game Container (Overlays everything when active) -->
+    <!-- Game Container -->
     <div id="game-container">
-        
         <iframe 
             id="unity-iframe" 
             src="unity_build/index.html"
             style="width: 100%; height: 100%; border: none;">
         </iframe>
-
     </div>
 
     <script>
@@ -158,20 +141,32 @@
         const AR_SCENE = document.querySelector('a-scene');
         const GAME_CONTAINER = document.getElementById('game-container');
         const STATUS_TEXT = document.getElementById('status-text');
-        
         const UNITY_IFRAME = document.getElementById('unity-iframe');
-        let unityGameInstance = null; 
+
+        // Logic Variables
+        let pendingMissionId = null; // Stores the mission ID while waiting for Unity
 
         // --- EVENT LISTENERS ---
         AR_SCENE.addEventListener('loaded', () => {
             console.log("AR Scene Loaded");
             
+            // 1. Listen for Target Index 0 (Mission 1)
+            const target0 = document.getElementById('target-0');
+            if(target0) {
+                target0.addEventListener('targetFound', () => {
+                    console.log("Target 0 Found! Queueing Mission 1");
+                    triggerGameMode(1); 
+                });
+            }
+
+            // 2. Listen for Target Index 1 (Mission 2)
             const target1 = document.getElementById('target-1');
-            
-            target1.addEventListener('targetFound', () => {
-                console.log("Target Found!");
-                triggerGameMode(1); // Start Mission 1
-            });
+            if(target1) {
+                target1.addEventListener('targetFound', () => {
+                    console.log("Target 1 Found! Queueing Mission 2");
+                    triggerGameMode(2); 
+                });
+            }
         });
 
         // --- CORE LOGIC ---
@@ -186,20 +181,40 @@
                 arSystem.pause(); 
             }
 
-            // *** CRITICAL FIX 1: HIDE AR SCENE ELEMENT ***
+            // *** VISIBILITY FIX: HIDE AR SCENE & VIDEO ***
             AR_SCENE.style.display = 'none';
-
-            // *** CRITICAL FIX 2: FIND AND HIDE THE VIDEO ELEMENT EXPLICITLY ***
-            // This is the underlying cause of the frozen screen.
             const videoElement = document.querySelector('video');
             if (videoElement) {
                 videoElement.style.display = 'none';
             }
 
-            // 3. Show Game Container (Now nothing should be behind it)
+            // 3. Show Game Container
             GAME_CONTAINER.style.display = 'flex';
             
-            console.log(`Mission ${missionId} Started`);
+            // 4. START RETRY LOOP
+            // We save the ID we want to load, and start trying to send it
+            pendingMissionId = missionId;
+            attemptSendToUnity();
+        }
+
+        // Recursive function to wait for Unity to initialize
+        function attemptSendToUnity() {
+            // Check if the Unity Instance inside the iframe exists
+            if (UNITY_IFRAME.contentWindow && UNITY_IFRAME.contentWindow.unityInstance) {
+                console.log(`Unity is Ready! Sending Mission ${pendingMissionId}...`);
+                
+                // SEND THE MESSAGE
+                // "GameManager" = Name of GameObject in Unity
+                // "LoadMission" = Name of Function in GameController.cs
+                UNITY_IFRAME.contentWindow.unityInstance.SendMessage('GameManager', 'LoadMission', pendingMissionId);
+                
+                // Stop waiting
+                pendingMissionId = null;
+            } else {
+                console.log("Unity not ready yet... Waiting 500ms...");
+                // Retry in 0.5 seconds
+                setTimeout(attemptSendToUnity, 500);
+            }
         }
 
         function finishMission() {
@@ -208,11 +223,8 @@
             // 1. Hide Game
             GAME_CONTAINER.style.display = 'none';
 
-            // 2. Resume AR
-            // *** CRITICAL FIX 1: SHOW AR SCENE ELEMENT ***
+            // 2. Resume AR & Show Video
             AR_SCENE.style.display = 'block';
-
-            // *** CRITICAL FIX 2: SHOW THE VIDEO ELEMENT EXPLICITLY ***
             const videoElement = document.querySelector('video');
             if (videoElement) {
                 videoElement.style.display = 'block';
@@ -220,12 +232,11 @@
 
             const arSystem = AR_SCENE.systems['mindar-image-system'];
             if (arSystem) {
-                arSystem.unpause(); // Resume camera processing
+                arSystem.unpause(); 
             }
 
             // 3. Update Status
-            STATUS_TEXT.innerText = "Mission Complete! Find next target.";
-            
+            STATUS_TEXT.innerText = "Mission Complete! Scan next card.";
         }
 
         // --- BRIDGE FOR UNITY TO CALL JAVASCRIPT ---
